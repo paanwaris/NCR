@@ -1,7 +1,7 @@
 ---
 title: "Niche-Center"
 author: "Paanwaris Paansri"
-date: "2025-06-03"
+date: "2025-10-03"
 output: html_document
 editor_options: 
   chunk_output_type: console
@@ -9,140 +9,156 @@ editor_options:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = "")
 options(rgl.useNULL = TRUE)  # Prevent RGL display issues
 ```
 
+1. Load Libraries
+This chunk loads all the necessary R packages for the analysis. Each package serves a specific purpose, from spatial data manipulation to data visualization. 
 ```{r}
-library(terra)         # Spatial data handling
-library(spThin)        # Spatial thinning of occurrence data
-library(pgirmess)      # Spatial autocorrelation functions
-library(hypervolume)   # Hypervolume estimation
-library(rworldmap)     # World map data
-library(gtools)        # Miscellaneous functions, used for 'mixedsort'
-library(maps)          # Map plotting
-library(tidyverse)
-library(ncdf4)
-library(sf)
-library(usdm) 
-library(ellipsenm)
-library(vegan)
-library(plotly)
-library(geodata)
-library(RColorBrewer)
-library(ggpmisc)
-library(lubridate)
-library(rnaturalearth)
+# --- Core Data Manipulation & Spatial ---
+library(tidyverse) # A suite of packages for data manipulation and visualization (ggplot2, dplyr, etc.)
+library(terra)     # Modern package for handling raster and vector spatial data
+library(sf)        # Modern package for handling vector spatial data (features)
+
+# --- Niche & Species Distribution Modeling ---
+library(usdm)      # Tools for uncertainty analysis in species distribution models (e.g., VIF)
+library(ellipsenm) # Tools for creating ellipsoidal niche models
+
+# --- Visualization ---
+library(plotly)         # For creating interactive 3D plots
+library(RColorBrewer)   # Provides color palettes for plotting
+library(ggpmisc)        # Extends ggplot2 with tools for adding stats to plots
+library(maps)           # Basic map datasets
+library(rnaturalearth)  # Higher-quality map datasets
+
+# --- Utility & Other ---
+library(geodata)   # For downloading climate and other geographic data
+library(lubridate) # For easier handling of dates and times
 ```
 
+2. Load and Prepare Occurrence Data
+Here, we load the Peromyscus occurrence records, remove any duplicate points based on coordinates, and convert the dataset into a terra spatial vector object for use in spatial analyses.
 ```{r}
-pero_merge <- read_csv("/dat_neon_gbif_pero.csv") %>%
+# Read the occurrence data from a CSV file
+# The 'distinct' function removes duplicate rows based on longitude and latitude,
+# keeping the first record encountered (.keep_all = TRUE).
+peromyscus_occ <- read_csv("data/Peromyscus_occurrence.csv") %>%
   distinct(decimalLongitude, decimalLatitude, .keep_all = TRUE)
 
-# Convert Vic data to spatial vector (terra object)
-pero_merge_vec <- vect(pero_merge,
-                geom = c("decimalLongitude", "decimalLatitude"),
-                crs = "epsg:4326", 
-                keepgeom = FALSE)
-
+# Convert the data frame into a SpatVector object (from the 'terra' package).
+# This is necessary for spatial operations like buffering and extracting raster values.
+peromyscus_vec <- vect(peromyscus_occ,
+                     geom = c("decimalLongitude", "decimalLatitude"),
+                     crs = "epsg:4326",  # Set the coordinate reference system to WGS84
+                     keepgeom = FALSE)
 ```
 
+3. Define Study Area and Prepare Environmental Data (PCA)
+This section defines the study area by creating a buffer around the occurrence points. It then downloads global climate data, clips it to the study area, and performs a Principal Component Analysis (PCA) to reduce the dimensionality of the environmental variables.
 ```{r}
-pero_buffer <- buffer(pero_merge_vec, width = 200000)
-pero_buffer <- aggregate(pero_buffer)
-plot(pero_buffer)
+# --- Step 3a: Define the Study Area ---
+# Create a 200km (200,000 meters) buffer around each occurrence point.
+# This helps define the accessible area 'M' for the genus.
+peromyscus_buffer <- buffer(peromyscus_vec, width = 200000)
 
-# res=0.5 corresponds to 30 seconds
-bioclim_full <- worldclim_global(var = "bio", res = 0.5, path = tempdir())
+# Aggregate the individual buffers into a single polygon representing the total study area.
+peromyscus_buffer <- aggregate(peromyscus_buffer)
+plot(peromyscus_buffer, main = "Study Area Buffer")
 
-# Exclude the specified layers
-cat("Excluding BIO8, BIO9, BIO18, and BIO19...\n")
-vars_to_exclude <- c("bio8", "bio9", "bio18", "bio19")
-# Get the names of all layers, remove the ones to exclude
-layer_names <- names(bioclim_cropped)
-vars_to_keep <- layer_names[!grepl(paste(vars_to_exclude, collapse = "|"), layer_names)]
+# --- Step 3b: Download and Process Bioclimatic Data ---
+# Download WorldClim bioclimatic variables at 30 arc-second resolution.
+# We exclude BIO8, BIO9, BIO18, and BIO19 as they often deal with quarter-based
+# extremes and can be less stable or relevant than annual/monthly variables.
+bioclim_full <- worldclim_global(path = tempdir(), res = 0.5, var = "bio")
+bioclim_full <- bioclim_full[[c(1:7, 10:17)]] # Select desired layers
 
-bioclim_final <- subset(bioclim_cropped, vars_to_keep)
+# Crop the global raster layers to the extent of our study area buffer.
+# The 'mask = TRUE' argument ensures that values outside the polygon are set to NA.
+bioclim_cropped <- crop(bioclim_full, peromyscus_buffer, mask = TRUE)
+plot(bioclim_cropped[[1]], main = "Cropped Bioclimatic Layer (BIO1)")
 
-# Crop the global raster to your study area
-bioclim_cropped <- crop(bioclim_final, pero_buffer, mask = TRUE)
+# --- Step 3c: Perform Principal Component Analysis (PCA) ---
+# PCA is used to reduce the 15 correlated bioclimatic variables into a few
+# uncorrelated principal components (PCs) that explain most of the environmental variance.
+# We use na.omit to handle cells with no data within the cropped extent.
+pca <- prcomp(bioclim_cropped, scale. = TRUE, center = TRUE)
 
-pca <- prcomp(bioclim_cropped, scale. = TRUE)
-
-# --- Step 4: Predict PCA Scores onto the Raster ---
-# This projects the PCA model back into geographic space
+# Project the PCA model back onto the geographic space to create PC raster layers.
+# We only use the first 3 PCs, which typically capture the majority of the variance.
 pca_raster <- predict(bioclim_cropped, pca, index = 1:3)
-
-# Rename the PCA layers for clarity, as requested
-names(pca_raster) <- paste0("PC", 1:3)
-plot(pca_raster)
+names(pca_raster) <- paste0("PC", 1:3) # Rename layers for clarity
+plot(pca_raster, main = "Principal Component Rasters")
 ```
 
+4. Construct Environmental Niche Ellipsoids
+In this chunk, we define the environmental niche for the entire genus and for each individual species using 3D ellipsoids. The ellipsoids are constructed in the environmental space defined by the first three PCs.
 ```{r}
-# Clean and prepare the occurrence locations
-locs <- pero_merge %>%
-  dplyr::select(species, decimalLongitude, decimalLatitude) %>%
+# --- Step 4a: Extract PC Values for Occurrence Points ---
+# Extract the PC values from the raster layers at each occurrence location.
+bioclim_values <- terra::extract(pca_raster, peromyscus_vec)[, -1] # Drop the ID column
+
+# Combine the original occurrence data with the extracted PC values.
+# na.omit() removes any points that fell outside the raster coverage.
+full_data <- cbind(as.data.frame(peromyscus_vec), bioclim_values) %>%
   na.omit()
 
-# Extract the bioclimatic values
-bioclim_values <- terra::extract(pca_raster, pero_merge_vec)
-
-# Combine extracted data with species data and clean up
-# The first column from extract is an ID, so we remove it [,-1]
-full_data <- cbind(as.data.frame(pero_merge_vec), bioclim_values) %>% 
-  na.omit()
-
-# Step 5: Generate Ellipsoids
-# Your function to generate ellipsoid points based on a center and covariance matrix
+# --- Step 4b: Function to Generate Ellipsoid Points ---
+# This function calculates the 3D coordinates of an ellipsoid surface
+# based on a centroid (mean) and a covariance matrix.
 generate_ellipsoid <- function(center, covariance, confidence_level = 0.95) {
-  df <- length(center)
+  df <- length(center) # Degrees of freedom (3 for 3D)
+  # Chi-squared quantile defines the radius/size of the ellipsoid
   chi_sq_quantile <- qchisq(confidence_level, df)
+  
+  # Eigen decomposition finds the orientation and length of the ellipsoid axes
   eig <- eigen(covariance)
   eigenvalues <- eig$values
   eigenvectors <- eig$vectors
+  
+  # Scale a unit sphere to the shape of the ellipsoid
   scaling_factors <- sqrt(chi_sq_quantile * eigenvalues)
-  u <- seq(0, 2 * pi, length.out = 50)
-  v <- seq(0, pi, length.out = 50)
-  sphere_x <- outer(cos(u), sin(v))
-  sphere_y <- outer(sin(u), sin(v))
-  sphere_z <- outer(rep(1, length(u)), cos(v))
-  unit_sphere <- cbind(as.vector(sphere_x), as.vector(sphere_y), as.vector(sphere_z))
-  scaled_sphere <- unit_sphere %*% diag(scaling_factors)
-  rotated_sphere <- scaled_sphere %*% t(eigenvectors)
-  ellipsoid_points <- as.data.frame(rotated_sphere + rep(center, each = nrow(rotated_sphere)))
+  u <- seq(0, 2 * pi, length.out = 100)
+  v <- seq(0, pi, length.out = 100)
+  sphere_points <- t(sapply(u, function(ui) sapply(v, function(vi) c(cos(ui)*sin(vi), sin(ui)*sin(vi), cos(vi)))))
+  
+  # Apply scaling, rotation, and translation
+  ellipsoid_points <- as.data.frame(sphere_points %*% diag(scaling_factors) %*% t(eigenvectors))
+  ellipsoid_points <- as.data.frame(sweep(ellipsoid_points, 2, center, "+"))
+  
   return(ellipsoid_points)
 }
 
-# --- 5a. Genus-level "fundamental niche" ellipsoid ---
+
+# --- Step 4c: Genus-level "Fundamental Niche" Ellipsoid ---
+# Calculate the centroid and covariance for all Peromyscus occurrences
 genus_pcs <- full_data %>% dplyr::select(PC1, PC2, PC3)
 genus_centroid <- colMeans(genus_pcs)
 genus_cov <- cov(genus_pcs)
-genus_ellipsoid <- generate_ellipsoid(genus_centroid, genus_cov, confidence_level = 0.95)
+genus_ellipsoid <- generate_ellipsoid(genus_centroid, genus_cov)
 colnames(genus_ellipsoid) <- c("PC1", "PC2", "PC3")
 
-# --- 5b. Species-specific ellipsoids ---
+# --- Step 4d: Species-specific Ellipsoids ---
 species_list <- unique(full_data$species)
-ellipsoid_list <- list()
-# Create an empty list to store the centroids before the loop
-centroid_list <- list()
+ellipsoid_list <- list() # To store ellipsoid points
+centroid_list <- list()   # To store species centroids
 
 for (sp in species_list) {
-  species_subset <- full_data %>% # Assuming your data is in `data_with_pcs`
+  species_subset <- full_data %>%
     filter(species == sp) %>%
     dplyr::select(PC1, PC2, PC3)
 
-  # A species needs at least 4 points to calculate a 3D covariance matrix.
+  # A species needs at least 4 points for a 3D covariance matrix.
+  # We use a higher threshold for stability.
   if (nrow(species_subset) > 6) {
     center <- colMeans(species_subset)
-    
-    # --- ADDITION: Store the calculated centroid ---
-    # We convert the center vector to a data frame and add the species name
-    centroid_list[[sp]] <- as.data.frame(t(center)) %>% 
-      mutate(species = sp)
-    # ---------------------------------------------
-
     covariance <- cov(species_subset)
-    ellipsoid_df <- generate_ellipsoid(center, covariance, confidence_level = 0.95)
+    
+    # Store the calculated centroid
+    centroid_list[[sp]] <- as.data.frame(t(center)) %>%
+      mutate(species = sp)
+      
+    # Generate and store the ellipsoid
+    ellipsoid_df <- generate_ellipsoid(center, covariance)
     colnames(ellipsoid_df) <- c("PC1", "PC2", "PC3")
     ellipsoid_list[[sp]] <- ellipsoid_df
   } else {
@@ -150,43 +166,51 @@ for (sp in species_list) {
   }
 }
 
-# After the loop, combine the list of centroids into a single data frame
+# Combine the list of individual centroids into a single data frame
 all_centroids <- bind_rows(centroid_list)
 ```
 
+5. Process Population Abundance Data
+We now load a separate dataset containing population abundance estimates. We'll extract the PC scores for these locations to place them within our defined environmental niche space.
 ```{r}
-pop_data <- read.csv("output/population_All.csv")
+# Load population data
+pop_data <- read.csv("data/Peromyscus_population.csv")
 
-# Filter for density estimates and select relevant columns
+# Clean data: select relevant columns and remove rows with missing values
 pop_sites <- pop_data %>%
+  dplyr::select(decimalLongitude, decimalLatitude, estimate) %>%
   na.omit()
 
-# Extract bioclim data for these site coordinates
+# Extract the PC scores for each population site coordinate
 site_coords <- pop_sites %>% dplyr::select(decimalLongitude, decimalLatitude)
-site_pc_scores <- terra::extract(pca_raster, site_coords, fun = NULL)
-site_pc_scores_df <- as.data.frame(site_pc_scores[,-1])
-colnames(site_pc_scores_df) <- colnames(site_pc_scores_df)
+site_pc_scores <- terra::extract(pca_raster, site_coords)[, -1] # Drop ID column
 
-# Combine the population estimates with their new PC scores
-pop_total_datsite <- cbind(pop_sites, site_pc_scores_df) %>%
+# Combine the population estimates with their corresponding PC scores
+pop_total_datsite <- cbind(pop_sites, site_pc_scores) %>%
   na.omit()
 ```
 
-
+6. Visualize Niches and Abundance in 3D Space
+This chunk creates an interactive 3D plot to visualize the niche relationships. It shows:
+ - The overall environmental space occupied by the genus (gray points).
+ - The genus-level niche ellipsoid (large blue outline).
+ - Individual species niche ellipsoids (colored outlines).
+ - The niche centroid for each species and the genus.
+- Population abundance data, where marker size represents abundance (red points).
 ```{r}
-# Define a color palette for the species
-# *** THIS IS THE UPDATED SECTION FOR 35+ COLORS ***
-# 1. Create a palette-generating function from a good base palette
+# --- Step 6a: Create a Color Palette for Species ---
+# Create a palette-generating function
 get_palette <- colorRampPalette(brewer.pal(12, "Paired"))
-# 2. Generate the exact number of colors needed
+# Generate the exact number of colors needed for the species
 num_species <- length(ellipsoid_list)
 species_colors <- get_palette(num_species)
-# 3. Create a named map to assign colors to species
+# Create a named map to assign a consistent color to each species
 color_map <- setNames(species_colors, names(ellipsoid_list))
 
+# --- Step 6b: Build the 3D Plot Layer by Layer ---
 fig <- plot_ly()
 
-# Add all occurrence points as a grey background
+# Layer 1: All occurrence points as a grey background
 fig <- fig %>% add_trace(
   data = full_data,
   x = ~PC1, y = ~PC2, z = ~PC3,
@@ -198,7 +222,7 @@ fig <- fig %>% add_trace(
   name = 'All Occurrences'
 )
 
-# Add the main genus-level ellipsoid
+# Layer 2: The main genus-level ellipsoid
 fig <- fig %>% add_trace(
   data = genus_ellipsoid,
   x = ~PC1, y = ~PC2, z = ~PC3,
@@ -207,10 +231,10 @@ fig <- fig %>% add_trace(
   line = list(width = 5, color = "darkblue", shape = "spline"),
   connectgaps = TRUE,
   opacity = 0.3,
-  name = 'Genus Niche (Peromyscus)'
+  name = 'Genus Niche (<i>Peromyscus</i>)'
 )
 
-# Add each species-specific ellipsoid with a unique color
+# Layer 3: Each species-specific ellipsoid
 for (sp in names(ellipsoid_list)) {
   fig <- fig %>% add_trace(
     data = ellipsoid_list[[sp]],
@@ -219,12 +243,12 @@ for (sp in names(ellipsoid_list)) {
     mode = 'lines',
     line = list(size = 1, color = color_map[[sp]], shape = "spline"),
     opacity = 0.2,
-    name = sp,
+    name = paste("<i>", sp, "</i>"),
     showlegend = TRUE
   )
 }
 
-# *** NEW: Add the species centroids ***
+# Layer 4: Species centroids
 fig <- fig %>% 
   add_trace(data = all_centroids, 
             x = ~PC1, y = ~PC2, z = ~PC3,
@@ -235,7 +259,7 @@ fig <- fig %>%
             name = 'Species Centroids', 
             showlegend = TRUE)
 
-# *** NEW: Add the overall genus centroid ***
+# Layer 5: The overall genus centroid
 fig <- fig %>% 
   add_trace(x = ~genus_centroid[1], y = ~genus_centroid[2], z = ~genus_centroid[3],
             type = 'scatter3d', 
@@ -243,18 +267,7 @@ fig <- fig %>%
             marker = list(size = 8, color = 'black', symbol = 'diamond'),
             name = 'Genus Centroid', showlegend = TRUE)
 
-# Customize the plot layout
-fig <- fig %>% layout(
-  title = "3D Environmental Niche Space for the Genus Peromyscus",
-  scene = list(
-    xaxis = list(title = "PC1"),
-    yaxis = list(title = "PC2"),
-    zaxis = list(title = "PC3")
-  ),
-  legend = list(title = list(text = '<b>Species</b>'))
-)
-
-# --- NEW: Add the population size markers ---
+# Layer 6: Population size markers
 fig <- fig %>% 
   add_trace(data = pop_total_datsite, 
             x = ~PC1, y = ~PC2, z = ~PC3,
@@ -265,133 +278,82 @@ fig <- fig %>%
                           opacity = 0.8),
             name = 'Population Density', showlegend = TRUE)
 
-# Print the figure to display it
-fig
-```
-
-```{r}
-# --- Step 1: Calculate Distances to Centroids ---
-
-# Ensure the required data frames from the previous steps are available:
-# - pop_total_datsite: Population sites with their PC scores
-# - genus_centroid: A named vector with PC1, PC2, PC3 for the genus
-# - all_centroids: A data frame with PC1, PC2, PC3 for each species
-
-# Helper function for Euclidean distance in 3D
-euc_dist <- function(p1, p2) {
-  sqrt(sum((p1 - p2)^2))
-}
-
-# 1a. Calculate distance for each site to the GENUS centroid
-pop_total_datsite$dist_to_genus_centroid <- apply(
-  pop_total_datsite[, c("PC1", "PC2", "PC3")], 1, 
-  function(site_coords) {
-    euc_dist(site_coords, genus_centroid)
-  }
+# --- Step 6c: Customize the Plot Layout ---
+fig <- fig %>% layout(
+  scene = list(
+    xaxis = list(title = "PC1"),
+    yaxis = list(title = "PC2"),
+    zaxis = list(title = "PC3")
+  ),
+  legend = list(title = list(text = '<b>Legend</b>'))
 )
 
-# --- Step 2: Create the Plots ---
-
-# 2a. Plot 1: Abundance vs. Distance to GENUS Centroid
-plot_genus <- ggplot(pop_total_datsite, aes(x = dist_to_genus_centroid, y = estimate)) +
-  geom_point(size = 4, colour = "#0072B2") +
-  stat_poly_line(formula = y ~ log(x), colour = "black", fill = "#D55E00", alpha = 0.3) +
-  stat_poly_eq(
-    aes(label = sprintf("%s*\", \"*%s*\", \"*%s",
-                        after_stat(rr.label),
-                        after_stat(f.value.label),
-                        after_stat(p.value.label))),
-    formula = y ~ log(x),
-    label.y = "top", label.x = "right", size = 5, parse = TRUE
-  ) +
-  labs(
-    x = "Distance to Genus Niche Centroid", 
-    y = "Abundance",
-    title = "Niche-Abundance Relationship (Genus Level)"
-  ) +
-  theme_classic() +
-  theme(
-    text = element_text(family = "serif", size = 14),
-    plot.title = element_text(size = 18, face = "bold"),
-    axis.title = element_text(size = 16),
-    axis.text = element_text(size = 14)
+# Display the interactive plot
+fig %>% layout(
+  font = list(
+    family = "Times New Roman",
+    size = 12)
   )
-
-plot_genus
-
-# --- Step 1: Restructure Data for Faceting ---
-# (This code is the same as before, assuming you have the necessary data frames)
-
-all_centroids_renamed <- all_centroids %>%
-  rename(centroid_species = species)
-
-long_distance_df <- pop_total_datsite %>%
-  mutate(key = 1) %>%
-  full_join(
-    all_centroids_renamed %>% mutate(key = 1),
-    by = "key",
-    relationship = "many-to-many"
-  ) %>%
-  dplyr::select(-key)
-
-long_distance_df <- long_distance_df %>%
-  rowwise() %>%
-  mutate(
-    distance = sqrt(
-      (PC1.x - PC1.y)^2 + (PC2.x - PC2.y)^2 + (PC3.x - PC3.y)^2
-    )
-  ) %>%
-  ungroup()
-
-
-# --- Step 2: Create the Corrected Faceted Plot ---
-
-# The formula for the regression equation on the plot
-formula <- y ~ log(x)
-
-plot_faceted <- ggplot(long_distance_df, aes(x = distance, y = estimate)) +
-  geom_point(size = 2, alpha = 0.6, colour = "#db1049") +
-  stat_poly_line(formula = formula, colour = "black", fill = "#ffc20c", alpha = 0.4) +
-  
-  # --- THIS IS THE CORRECTED SECTION ---
-  stat_poly_eq(
-    aes(label = paste(after_stat(rr.label), after_stat(p.value.label), sep = "*\", \"*")),
-    formula = formula,
-    label.y = "top", label.x = "right", size = 3.5, parse = TRUE
-  ) +
-  # -------------------------------------
-
-  facet_wrap(~ centroid_species, scales = "free_x") +
-  labs(
-    x = "Euclidean Distance to Species Niche Centroid", 
-    y = "Abundance (ind/hectare)",
-    title = "Site Abundance vs. Distance to Each Species' Niche Centroid"
-  ) +
-  theme_bw() +
-  theme(
-    text = element_text(family = "serif", size = 12),
-    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
-    axis.title = element_text(size = 14),
-    axis.text = element_text(size = 10),
-    strip.text = element_text(face = "bold.italic", size = 11),
-    strip.background = element_rect(fill = "grey90", color = "black")
-  )
-
-plot_faceted
 ```
 
-##R Script to Calculate Temporal occupancy
-This script will load your data, parse the eventDate column, assign records to a grid, and then calculate the number of unique years each grid cell has a detection.
-
+7. Test Niche-Center Relationship (Genus Level)
+Here, we test the "niche centrality" hypothesis at the genus level: are populations more abundant in environments that are closer to the center of the genus's overall environmental niche? We calculate the Euclidean distance from each population site to the genus centroid and plot it against abundance.
 ```{r}
-# Using the "(1)" version of the file as specified
-occur_data <- read_csv("data/dat_neon_gbif_pero.csv")
+# --- Step 7a: Calculate Distances to Genus Centroid ---
+# Helper function for 3D Euclidean distance
+euc_dist <- function(p1, p2) sqrt(sum((p1 - p2)^2))
 
+# Calculate distance for each population site to the GENUS centroid
+pop_total_datsite$dist_to_genus_centroid <- apply(
+  pop_total_datsite[, c("PC1", "PC2", "PC3")], 1,
+  function(site_coords) euc_dist(site_coords, genus_centroid)
+)
+
+# --- Step 7b: Create the Plot ---
+plot_genus_abundance <- ggplot(pop_total_datsite, 
+                               aes(x = dist_to_genus_centroid, y = estimate)) +
+  geom_point(size = 3, alpha = 0.7) +
+  # A log-linear model is often suitable for ecological relationships
+  stat_poly_line(formula = y ~ log(x), 
+                 se = TRUE, 
+                 alpha = 0.2) +
+  stat_poly_eq(aes(label = paste(after_stat(eq.label), 
+                                 after_stat(p.value.label), 
+                                 sep = "*\", \"*")),
+               formula = y ~ log(x),
+               label.y = "top", 
+               label.x = "right", 
+               size = 4, 
+               parse = TRUE,
+               family = "serif"
+  ) +
+  labs(
+    x = "Distance to Genus Niche Centroid",
+    y = "Population Abundance (Estimate)",
+    title = "Niche-Abundance Relationship (Genus Level)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    text = element_text(family = "serif"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+plot_genus_abundance
+```
+
+8. Calculate Temporal Occupancy Frequency
+Instead of abundance, we can use temporal occupancy as a proxy for habitat suitability. A location that is consistently occupied over time is likely high-quality habitat. Here we calculate a "monthly occupancy frequency" metric for grid cells across the study area.
+```{r}
+# Re-read occurrence data (or reuse 'pero' if no changes).
+occur_data <- read_csv("data/Peromyscus_occurrence.csv")
+
+# Create a proper datetime column from year, month, day.
 occur_data$datetime <- as.POSIXct(paste0(occur_data$day,'-',
                                          occur_data$month,'-',
                                          occur_data$year),
                                   format = '%d-%m-%Y')
-# Clean data, and importantly, parse the date and extract year and month
+
+# Process the data: select columns, remove NAs, and create a 'year_month' identifier.
 locs <- occur_data %>%
   dplyr::select(species, decimalLongitude, decimalLatitude, datetime) %>%
   na.omit() %>%
@@ -402,272 +364,259 @@ locs <- occur_data %>%
   filter(!is.na(year) & !is.na(month)) %>%
   unite("year_month", year, month, sep = "_", remove = FALSE)
 
-# --- Step 2: Determine Overall Survey Period in MONTHS ---
-# Find the total time span of the entire dataset in months
-min_date <- min(locs$datetime)
-max_date <- max(locs$datetime)
+# Determine the total time span of the survey in months.
+# This will be the denominator in our frequency calculation.
+min_date <- min(locs$datetime, na.rm = TRUE)
+max_date <- max(locs$datetime, na.rm = TRUE)
+total_survey_months <- interval(min_date, max_date) %/% months(1, abbreviate = FALSE) + 1
 
-# Calculate the total number of months in the interval
-total_survey_months <- interval(min_date, max_date) %/% months(1) + 1
-
-# --- Step 3: Grid the Data and Calculate Monthly Occupancy Frequency ---
+# Snap the occurrence points to a grid that matches the resolution of our PCA rasters.
 grid_resolution <- res(pca_raster)[1]
-
 locs_with_grid <- locs %>%
   mutate(
     grid_lon = floor(decimalLongitude / grid_resolution) * grid_resolution,
     grid_lat = floor(decimalLatitude / grid_resolution) * grid_resolution
   )
 
-# Calculate the new metric for each grid cell
+# For each grid cell, calculate the monthly occupancy frequency.
+# Metric = (Number of unique months with a detection) / (Total number of survey months).
 monthly_occupancy_freq_grid <- locs_with_grid %>%
   group_by(grid_lon, grid_lat) %>%
   summarise(
-    # Numerator: The number of unique months with detections
     n_unique_months = n_distinct(year_month, na.rm = TRUE),
-    
-    # The new robust metric
     monthly_occupancy_frequency = n_unique_months / total_survey_months,
-    
-    mean_lon = mean(decimalLongitude),
+    mean_lon = mean(decimalLongitude), # Keep mean coordinates for plotting
     mean_lat = mean(decimalLatitude),
     .groups = 'drop'
   ) %>%
   arrange(desc(monthly_occupancy_frequency))
 
-# --- Step 4: Visualize the Results ---
+# Visualize the occupancy frequency on a map.
 world_map <- map_data("world")
-
 monthly_occupancy_map <- ggplot() +
-  geom_polygon(data = world_map, aes(x = long, y = lat, group = group),
+  geom_polygon(data = world_map, 
+               aes(x = long, y = lat, group = group),
                fill = "gray90", color = "white") +
-
   geom_tile(data = monthly_occupancy_freq_grid,
-            aes(x = grid_lon, y = grid_lat, fill = monthly_occupancy_frequency),
+            aes(x = grid_lon, y = grid_lat, 
+                fill = monthly_occupancy_frequency),
             width = grid_resolution, height = grid_resolution, alpha = 0.9) +
-
-  scale_fill_viridis_c(
-    name = "Monthly\nOccupancy\nFrequency",
-    option = "plasma",
-    labels = scales::percent
-  ) +
-
-  coord_fixed(
-    xlim = range(locs$decimalLongitude) + c(-2, 2),
-    ylim = range(locs$decimalLatitude) + c(-2, 2)
-  ) +
-
-  labs(
-    title = "Occupancy Frequency of Peromyscus",
-    x = "Longitude",
-    y = "Latitude"
-  ) +
+  scale_fill_viridis_c(name = "Monthly\nOccupancy\nFrequency",
+                       option = "plasma", labels = scales::percent) +
+  coord_fixed(xlim = range(locs$decimalLongitude) + c(-2, 2),
+              ylim = range(locs$decimalLatitude) + c(-2, 2)) +
+  labs(title = "Occupancy Frequency of Peromyscus", x = "Longitude", y = "Latitude") +
   theme_minimal()
 
 print(monthly_occupancy_map)
 ```
 
+9. Test Niche-Occupancy Relationship (Genus Level)
+Similar to the abundance analysis, we now test if temporal occupancy is higher in environments closer to the genus niche centroid.
 ```{r}
-# Extract the mean coordinates from the grid cells
+# --- Step 9a: Extract PC values for Occupancy Grid ---
+# Get coordinates for the center of each grid cell
 occupancy_grid_coords <- monthly_occupancy_freq_grid %>%
-  dplyr::select(mean_lon, mean_lat) %>%
-  rename(decimalLongitude = mean_lon, decimalLatitude = mean_lat)
+  dplyr::select(mean_lon, mean_lat)
 
-# Extract bioclimatic data for these coordinates (assumes 'worldclim_data' is loaded)
-occupancy_pca_values <- terra::extract(pca_raster, occupancy_grid_coords, fun = NULL)
-occupancy_pca_df <- as.data.frame(occupancy_pca_values[,-1])
-colnames(occupancy_pca_df) <- colnames(occupancy_pca_df)
+# Extract PC values
+occupancy_pca_values <- terra::extract(pca_raster, occupancy_grid_coords)[, -1]
 
-# Create the final data frame for plotting and analysis
-occupancy_grid_pca <- cbind(monthly_occupancy_freq_grid, occupancy_pca_df) %>%
+# Combine occupancy data with PC scores
+occupancy_grid_pca <- cbind(monthly_occupancy_freq_grid, occupancy_pca_values) %>%
   na.omit()
-```
 
-```{r}
-fig <- plot_ly()
-
-# Add all occurrence points as a grey background
-fig <- fig %>% add_trace(
-  data = full_data,
-  x = ~PC1, y = ~PC2, z = ~PC3,
-  type = 'scatter3d',
-  mode = 'markers',
-  marker = list(size = 1.5, color = 'grey'),
-  opacity = 0.8,
-            connectgaps = TRUE,
-  name = 'All Occurrences'
-)
-
-# Add the main genus-level ellipsoid
-fig <- fig %>% add_trace(
-  data = genus_ellipsoid,
-  x = ~PC1, y = ~PC2, z = ~PC3,
-  type = 'scatter3d', 
-  mode = 'lines',
-  line = list(width = 5, color = "darkblue", shape = "spline"),
-  connectgaps = TRUE,
-  opacity = 0.3,
-  name = 'Genus Niche (Peromyscus)'
-)
-
-# Add each species-specific ellipsoid with a unique color
-for (sp in names(ellipsoid_list)) {
-  fig <- fig %>% add_trace(
-    data = ellipsoid_list[[sp]],
-    x = ~PC1, y = ~PC2, z = ~PC3,
-    type = 'scatter3d', 
-    mode = 'lines',
-    line = list(size = 1, color = color_map[[sp]], shape = "spline"),
-    opacity = 0.2,
-    name = sp,
-    showlegend = TRUE
-  )
-}
-
-# *** NEW: Add the species centroids ***
-fig <- fig %>% 
-  add_trace(data = all_centroids, 
-            x = ~PC1, y = ~PC2, z = ~PC3,
-            type = 'scatter3d', 
-            mode = 'markers',
-            marker = list(size = 5, color = ~color_map,
-                          line = list(color = 'black', width = 5)),
-            name = 'Species Centroids', 
-            showlegend = TRUE)
-
-# *** NEW: Add the overall genus centroid ***
-fig <- fig %>% 
-  add_trace(x = ~genus_centroid[1], y = ~genus_centroid[2], z = ~genus_centroid[3],
-            type = 'scatter3d', 
-            mode = 'markers',
-            marker = list(size = 12, color = 'black', symbol = 'diamond'),
-            name = 'Genus Centroid', showlegend = TRUE)
-
-# Customize the plot layout
-fig <- fig %>% layout(
-  title = "3D Environmental Niche Space for the Genus Peromyscus",
-  scene = list(
-    xaxis = list(title = "PC1"),
-    yaxis = list(title = "PC2"),
-    zaxis = list(title = "PC3")
-  ),
-  legend = list(title = list(text = '<b>Species</b>'))
-)
-
-# --- NEW: Add the population size markers ---
-fig <- fig %>% 
-  add_trace(data = occupancy_grid_pca, 
-            x = ~PC1, y = ~PC2, z = ~PC3,
-            type = 'scatter3d',
-            mode = 'markers',
-            marker = list(size = ~monthly_occupancy_frequency*200,
-                          color = 'red',
-                          opacity = 0.8),
-            name = 'Temporal occupancy', showlegend = TRUE)
-
-# Print the figure to display it
-fig
-```
-
-```{r}
-# Calculate distance to genus centroid
+# --- Step 9b: Calculate Distance and Plot ---
+# Calculate distance to the genus centroid for each grid cell
 occupancy_grid_pca$dist_to_genus_centroid <- apply(
-  occupancy_grid_pca[, c("PC1", "PC2", "PC3")], 1, 
+  occupancy_grid_pca[, c("PC1", "PC2", "PC3")], 1,
   function(grid_coords) euc_dist(grid_coords, genus_centroid)
 )
 
-# Plot 1: occupancy vs. Distance to GENUS Centroid
-plot_occupancy_genus <- ggplot(occupancy_grid_pca, aes(x = dist_to_genus_centroid, y = monthly_occupancy_frequency)) +
-  geom_point(size = 2, alpha = 0.3, colour = "#0072B2") +
-  stat_poly_line(formula = y ~ log(x), colour = "black", fill = "#0072B2", alpha = 0.3) +
-  stat_poly_eq(aes(label = paste(after_stat(rr.label), after_stat(p.value.label), sep = "*\", \"*")), formula = y ~ log(x),
-    label.y = "top", label.x = "right", size = 3.5, parse = TRUE
+# Create the plot
+plot_occupancy_genus <- ggplot(occupancy_grid_pca, 
+                               aes(x = dist_to_genus_centroid, 
+                                   y = monthly_occupancy_frequency)) +
+  geom_point(size = 2.5, alpha = 0.5) +
+  stat_poly_line(formula = y ~ log(x), 
+                 alpha = 0.2) +
+  stat_poly_eq(aes(label = paste(after_stat(eq.label), 
+                                 after_stat(p.value.label),
+                                 sep = "*\", \"*")), 
+               formula = y ~ log(x), 
+               label.y = "top", 
+               label.x = "right", 
+               size = 4, 
+               parse = TRUE,
+               family = "serif") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Distance to Genus Niche Centroid", 
+    y = "Monthly Occupancy Frequency",
+    title = "Niche-Occupancy Relationship (Genus Level)"
   ) +
-  labs(x = "Distance to Genus Niche Centroid", y = "Unique Month of Detection") +
   theme_classic(base_family = "serif", base_size = 14)
 
 plot_occupancy_genus
 ```
 
+10. Test Niche-Occupancy Relationship (Species Level)
+Finally, we test the hypothesis at the species level. Is a location's occupancy frequency for a specific species related to its distance from that species' own niche centroid? This is a more nuanced test of the niche centrality concept.
+
 ```{r}
-# NEW: Group by grid cell AND by species
+# --- Step 10a: Calculate Occupancy PER SPECIES PER GRID CELL ---
 sp_occupancy_grid <- locs_with_grid %>%
   group_by(grid_lon, grid_lat, species) %>%
   summarise(
-    # Numerator: The number of unique months for this species in this cell
     n_unique_months = n_distinct(year_month, na.rm = TRUE),
-    
-    # The monthly occupancy frequency metric
     monthly_occupancy_frequency = n_unique_months / total_survey_months,
-    
-    mean_lon = mean(decimalLongitude),
-    mean_lat = mean(decimalLatitude),
     .groups = 'drop'
-  ) %>%
-  arrange(desc(monthly_occupancy_frequency))
+  )
 
-# --- Step 2: Join occupancy Data with Niche & Centroid Data ---
-# Project grid cell locations into PCA space (uses objects from previous steps)
-sp_occupancy_grid_coords <- sp_occupancy_grid %>%
-  dplyr::select(mean_lon, mean_lat) %>%
-  rename(decimalLongitude = mean_lon, decimalLatitude = mean_lat)
-sp_pca_values <- terra::extract(pca_raster, sp_occupancy_grid_coords, fun = NULL)
-sp_pca_df <- as.data.frame(sp_pca_values[,-1])
-colnames(sp_pca_df) <- colnames(sp_pca_df)
+# --- Step 10b: Combine All Necessary Data ---
+# Extract PC scores for each grid cell
+sp_occupancy_coords <- sp_occupancy_grid %>% dplyr::select(grid_lon, grid_lat)
+sp_pca_values <- terra::extract(pca_raster, sp_occupancy_coords)[, -1]
+sp_occupancy_with_pcs <- cbind(sp_occupancy_grid, sp_pca_values)
 
-# Combine species occupancy data with the PC scores for each grid cell
-sp_occupancy_with_pcs <- cbind(sp_occupancy_grid, sp_pca_df)
-
-# Join the species centroids data (assumes 'all_centroids' is loaded)
-# We'll add suffixes to distinguish grid PC scores from centroid PC scores
+# Join this with the species centroid data calculated earlier
 analysis_df <- sp_occupancy_with_pcs %>%
-  left_join(all_centroids, by = "species", suffix = c("_grid", "_centroid"))
+  left_join(all_centroids, by = "species", suffix = c("_grid", "_centroid")) %>%
+  na.omit() # Important to remove rows where join failed (e.g., species with too few points)
 
-
-# --- Step 3: Calculate Distances and Create Faceted Plot ---
-# Calculate distance for each grid cell to its corresponding species' centroid
+# --- Step 10c: Calculate Distance to OWN Species Centroid ---
+# For each row, calculate the distance between the grid cell's PC values
+# and the centroid PC values for that specific species.
 analysis_df <- analysis_df %>%
   rowwise() %>%
   mutate(
-    distance = sqrt(
-      (PC1_grid - PC1_centroid)^2 + 
-      (PC2_grid - PC2_centroid)^2 + 
-      (PC3_grid - PC3_centroid)^2
+    distance_to_species_centroid = euc_dist(
+      p1 = c(PC1_grid, PC2_grid, PC3_grid),
+      p2 = c(PC1_centroid, PC2_centroid, PC3_centroid)
     )
   ) %>%
   ungroup()
 
+# Filter for species with enough data points to create a meaningful plot
 analysis_df_filtered <- analysis_df %>%
   group_by(species) %>%
   filter(n() >= 30) %>%
-  ungroup() %>% 
-  na.omit()
-```
+  ungroup()
 
-```{r}
-# Create the final faceted plot
-plot_faceted_species <- ggplot(analysis_df_filtered, aes(x = distance, y = monthly_occupancy_frequency)) +
-  geom_point(size = 2.5, alpha = 0.7, colour = "#0072B2") +
-  stat_poly_line(formula = y ~ log(x), se = FALSE, color = "black") + # Simplified line
+# --- Step 10d: Create the Faceted Plot ---
+plot_faceted_species <- ggplot(analysis_df_filtered, 
+                               aes(x = distance_to_species_centroid, 
+                                   y = monthly_occupancy_frequency)) +
+  geom_point(size = 2, alpha = 0.6) +
+  stat_poly_line(formula = y ~ log(x), 
+                 se = TRUE, 
+                 alpha = 0.2) +
   stat_poly_eq(
-    aes(label = paste(after_stat(rr.label), after_stat(p.value.label), sep = "*\", \"*")),
+    aes(label = paste(after_stat(eq.label), 
+                      after_stat(p.value.label), 
+                      sep = "*\", \"*")),
     formula = y ~ log(x),
-    label.y = "top", label.x = "right", size = 3, parse = TRUE
+    label.y = "top", label.x = "right", size = 3, parse = TRUE,
+    family = "serif"
   ) +
   # Create one plot panel for each species
   facet_wrap(~ species, scales = "free") +
+  scale_y_continuous(labels = scales::percent) +
   labs(
-    x = "Distance to Own Species Niche Centroid", 
-    y = "Unique Month of Detection"
+    x = "Distance to Own Species Niche Centroid",
+    y = "Monthly Occupancy Frequency",
+    title = "Niche-Occupancy Relationship at the Species Level"
   ) +
   theme_bw(base_family = "serif") +
   theme(
-    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
-    axis.title = element_text(size = 14),
-    strip.text = element_text(face = "bold.italic", size = 10),
-    strip.background = element_rect(fill = "grey90", color = "black")
-  )
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    strip.text = element_text(face = "bold.italic", size = 9))
 
 plot_faceted_species
 ```
 
+11. 3D VISUALIZATION: NICHE SPACE WITH TEMPORAL OCCUPANCY
+This chunk creates a similar 3D plot as before, but this time overlays the temporal occupancy frequency instead of population density.
+```{r}
+# --- 10. 3D VISUALIZATION: NICHE SPACE WITH TEMPORAL OCCUPANCY ---
+
+# This chunk creates a similar 3D plot as before, but this time overlays the
+# temporal occupancy frequency instead of population density.
+
+# Initialize plot
+fig_occ <- plot_ly()
+
+# Layer 1: All occurrences
+fig_occ <- fig_occ %>% 
+  add_trace(data = full_data, x = ~PC1, y = ~PC2, z = ~PC3, 
+            type = 'scatter3d', 
+            mode = 'markers',
+            marker = list(size = 1.5, color = 'grey', opacity = 0.8),
+            name = 'All Occurrences')
+
+# Layer 2: Genus ellipsoid
+fig_occ <- fig_occ %>% 
+  add_trace(data = genus_ellipsoid, x = ~PC1, y = ~PC2, z = ~PC3, 
+            type = 'scatter3d', 
+            mode = 'lines',
+            line = list(width = 5, color = "darkblue"), 
+            opacity = 0.3, 
+            name = 'Genus Niche (<i>Peromyscus</i>)')
+
+# Layer 3: Species ellipsoids
+for (sp in names(ellipsoid_list)) {
+  fig_occ <- fig_occ %>% 
+    add_trace(data = ellipsoid_list[[sp]], x = ~PC1, y = ~PC2, z = ~PC3, 
+              type = 'scatter3d',
+              mode = 'lines',
+              line = list(width = 3, color = color_map[[sp]]), 
+              opacity = 0.5, 
+              name = paste("<i>", sp, "</i>"), 
+              showlegend = TRUE)
+}
+
+# Layer 4: Species centroids
+fig_occ <- fig_occ %>% 
+  add_trace(data = all_centroids, x = ~PC1, y = ~PC2, z = ~PC3, 
+            type = 'scatter3d', 
+            mode = 'markers',
+            marker = list(size = 5, color = ~color_map[species], 
+                          line = list(color = 'black', width = 2)),
+            name = 'Species Centroids', 
+            showlegend = TRUE)
+
+# Layer 5: Genus centroid
+fig_occ <- fig_occ %>% 
+  add_trace(x = ~genus_centroid[1], y = ~genus_centroid[2], z = ~genus_centroid[3], 
+            type = 'scatter3d', 
+            mode = 'markers',
+            marker = list(size = 8, color = 'black', symbol = 'diamond'),
+            name = 'Genus Centroid', 
+            showlegend = TRUE)
+
+# Layer 6: Temporal Occupancy (red markers, sized by frequency).
+# The size is scaled by a large factor to make the points visible.
+fig_occ <- fig_occ %>% 
+  add_trace(data = occupancy_grid_pca, 
+            x = ~PC1, y = ~PC2, z = ~PC3,
+            type = 'scatter3d', mode = 'markers',
+            marker = list(size = ~monthly_occupancy_frequency*200, # Scale size for visibility
+                          color = 'red',
+                          opacity = 0.8),
+            name = 'Temporal Occupancy', showlegend = TRUE)
+
+# Customize layout
+fig_occ <- fig_occ %>% 
+  layout(scene = list(xaxis = list(title = "PC1"), 
+                      yaxis = list(title = "PC2"), 
+                      zaxis = list(title = "PC3")),
+         legend = list(title = list(text = '<b>Legend</b>')))
+
+# Display plot
+fig_occ %>% layout(
+  font = list(
+    family = "Times New Roman",
+    size = 12)
+  )
+```
