@@ -126,10 +126,8 @@ plot(peromyscus_buffer, main = "Study Area Buffer")
 # Download WorldClim bioclimatic variables at 30 arc-second resolution.
 # We exclude BIO8, BIO9, BIO18, and BIO19 as they often deal with quarter-based
 # extremes and can be less stable or relevant than annual/monthly variables.
-bioclim_full <- list.files(path = "C:/Users/paanw/Desktop/PhD/Dissertation/Chapter1/NCR/climate/wc2.1_30s",
-                        pattern = ".tif$",
-                        full.names = TRUE)
-bioclim_full <- rast(bioclim_full)
+bioclim_full <- worldclim_global(path = tempdir(), res = 0.5, var = "bio")
+bioclim_full <- bioclim_full[[c(1:7, 10:17)]] # Select desired layers
 
 # Crop the global raster layers to the extent of our study area buffer.
 # The 'mask = TRUE' argument ensures that values outside the polygon are set to NA.
