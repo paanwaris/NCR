@@ -337,11 +337,11 @@ fig <- fig %>% layout(
 )
 
 # Display the interactive plot
-fig %>% layout(
-  font = list(
-    family = "Times New Roman",
-    size = 12)
-  )
+# fig %>% layout(
+#  font = list(
+#    family = "Times New Roman",
+#    size = 12)
+#  )
 ```
 
 7. Test Niche-Center Relationship (Genus Level)
@@ -662,9 +662,9 @@ fig_occ <- fig_occ %>%
          legend = list(title = list(text = '<b>Legend</b>')))
 
 # Display plot
-fig_occ %>% layout(
-  font = list(
-    family = "Times New Roman",
-    size = 12)
-  )
+# fig_occ %>% layout(
+#  font = list(
+#    family = "Times New Roman",
+#    size = 12)
+#  )
 ```
