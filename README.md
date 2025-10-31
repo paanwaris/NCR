@@ -7,68 +7,16 @@ The Niche-Center Relationship in Ecological Niche Modeling
 ``` r
 # --- Core Data Manipulation & Spatial ---
 library(tidyverse) # A suite of packages for data manipulation and visualization (ggplot2, dplyr, etc.)
-#> ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
-#> ✔ dplyr     1.1.4     ✔ readr     2.1.5
-#> ✔ forcats   1.0.1     ✔ stringr   1.5.2
-#> ✔ ggplot2   4.0.0     ✔ tibble    3.3.0
-#> ✔ lubridate 1.9.4     ✔ tidyr     1.3.1
-#> ✔ purrr     1.1.0     
-#> ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
-#> ✖ dplyr::filter() masks stats::filter()
-#> ✖ dplyr::lag()    masks stats::lag()
-#> ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
 library(terra)     # Modern package for handling raster and vector spatial data
-#> terra 1.8.70
-#> 
-#> Attaching package: 'terra'
-#> 
-#> The following object is masked from 'package:tidyr':
-#> 
-#>     extract
 library(sf)        # Modern package for handling vector spatial data (features)
-#> Linking to GEOS 3.13.1, GDAL 3.11.0, PROJ 9.6.0; sf_use_s2() is TRUE
-
 # --- Niche & Species Distribution Modeling ---
 library(usdm)      # Tools for uncertainty analysis in species distribution models (e.g., VIF)
-
 # --- Visualization ---
 library(plotly)         # For creating interactive 3D plots
-#> 
-#> Attaching package: 'plotly'
-#> 
-#> The following object is masked from 'package:ggplot2':
-#> 
-#>     last_plot
-#> 
-#> The following object is masked from 'package:stats':
-#> 
-#>     filter
-#> 
-#> The following object is masked from 'package:graphics':
-#> 
-#>     layout
 library(RColorBrewer)   # Provides color palettes for plotting
 library(ggpmisc)        # Extends ggplot2 with tools for adding stats to plots
-#> Loading required package: ggpp
-#> Registered S3 methods overwritten by 'ggpp':
-#>   method                  from   
-#>   heightDetails.titleGrob ggplot2
-#>   widthDetails.titleGrob  ggplot2
-#> 
-#> Attaching package: 'ggpp'
-#> 
-#> The following object is masked from 'package:ggplot2':
-#> 
-#>     annotate
 library(maps)           # Basic map datasets
-#> 
-#> Attaching package: 'maps'
-#> 
-#> The following object is masked from 'package:purrr':
-#> 
-#>     map
 library(rnaturalearth)  # Higher-quality map datasets
-
 # --- Utility & Other ---
 library(geodata)   # For downloading climate and other geographic data
 library(lubridate) # For easier handling of dates and times
@@ -85,14 +33,6 @@ library(lubridate) # For easier handling of dates and times
 # keeping the first record encountered (.keep_all = TRUE).
 peromyscus_occ <- read_csv("data/Peromyscus_occurrence.csv") %>%
   distinct(decimalLongitude, decimalLatitude, .keep_all = TRUE)
-#> Rows: 76751 Columns: 8
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> chr (3): genus, species, eventDate
-#> dbl (5): decimalLongitude, decimalLatitude, month, day, year
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
 
 # Convert the data frame into a SpatVector object (from the 'terra' package).
 # This is necessary for spatial operations like buffering and extracting raster values.
@@ -133,7 +73,6 @@ bioclim_full <- bioclim_full[[c(1:7, 10:17)]] # Select desired layers
 # Crop the global raster layers to the extent of our study area buffer.
 # The 'mask = TRUE' argument ensures that values outside the polygon are set to NA.
 bioclim_cropped <- terra::crop(bioclim_full, peromyscus_buffer, mask = TRUE)
-#> |---------|---------|---------|---------|=========================================                                          
 plot(bioclim_cropped)
 ```
 
@@ -149,7 +88,6 @@ pca <- prcomp(bioclim_cropped, scale. = TRUE, center = TRUE)
 # Project the PCA model back onto the geographic space to create PC raster layers.
 # We only use the first 3 PCs, which typically capture the majority of the variance.
 pca_raster <- predict(bioclim_cropped, pca, index = 1:3)
-#> |---------|---------|---------|---------|=========================================                                          
 names(pca_raster) <- paste0("PC", 1:3) # Rename layers for clarity
 plot(pca_raster)
 ```
@@ -276,20 +214,6 @@ for (sp in species_list) {
     cat(paste("Skipping species '", sp, "' due to insufficient data (<= 6 points).\n", sep=""))
   }
 }
-#> Skipping species 'Peromyscus crinitus' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus caniceps' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus polius' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus gymnotis' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus ochraventer' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus nasutus' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus interparietalis' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus melanurus' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus stephani' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus winkelmanni' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus hooperi' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus sejugis' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus pseudocrinitus' due to insufficient data (<= 6 points).
-#> Skipping species 'Peromyscus slevini' due to insufficient data (<= 6 points).
 
 # Combine the list of individual centroids into a single data frame
 all_centroids <- bind_rows(centroid_list)
@@ -320,13 +244,6 @@ pop_total_datsite <- cbind(pop_sites, site_pc_scores) %>%
 
 6.  Visualize Niches and Abundance in 3D Space This chunk creates an
     interactive 3D plot to visualize the niche relationships. It shows:
-
-- The overall environmental space occupied by the genus (gray points).
-- The genus-level niche ellipsoid (large blue outline).
-- Individual species niche ellipsoids (colored outlines).
-- The niche centroid for each species and the genus.
-- Population abundance data, where marker size represents abundance (red
-  points).
 
 ``` r
 # --- Step 6a: Create a Color Palette for Species ---
@@ -695,9 +612,6 @@ plot_faceted_species <- ggplot(analysis_df_filtered,
     strip.text = element_text(face = "bold.italic", size = 9))
 
 plot_faceted_species
-#> Warning in ci_f_ncp(stat, df1 = df1, df2 = df2, probs = probs): Upper limit
-#> outside search range. Set to the maximum of the parameter range.
-#> Warning in compute_group(...): CI computation error: Error in check_output(cint, probs = probs, parameter_range = c(0, 1)): out[1] <= out[2] is not TRUE
 ```
 
 <img src="man/figures/README-unnamed-chunk-11-1.png" width="100%" />
