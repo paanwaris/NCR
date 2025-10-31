@@ -459,28 +459,7 @@ monthly_occupancy_freq_grid <- locs_with_grid %>%
     .groups = 'drop'
   ) %>%
   arrange(desc(monthly_occupancy_frequency))
-
-# Visualize the occupancy frequency on a map.
-world_map <- map_data("world")
-monthly_occupancy_map <- ggplot() +
-  geom_polygon(data = world_map, 
-               aes(x = long, y = lat, group = group),
-               fill = "gray90", color = "white") +
-  geom_tile(data = monthly_occupancy_freq_grid,
-            aes(x = grid_lon, y = grid_lat, 
-                fill = monthly_occupancy_frequency),
-            width = grid_resolution, height = grid_resolution, alpha = 0.9) +
-  scale_fill_viridis_c(name = "Monthly\nOccupancy\nFrequency",
-                       option = "plasma", labels = scales::percent) +
-  coord_fixed(xlim = range(locs$decimalLongitude) + c(-2, 2),
-              ylim = range(locs$decimalLatitude) + c(-2, 2)) +
-  labs(title = "Occupancy Frequency of Peromyscus", x = "Longitude", y = "Latitude") +
-  theme_minimal()
-
-monthly_occupancy_map
 ```
-
-<img src="man/figures/README-unnamed-chunk-9-1.png" width="100%" />
 
 9.  Test Niche-Occupancy Relationship (Genus Level) Similar to the
     abundance analysis, we now test if temporal occupancy is higher in
