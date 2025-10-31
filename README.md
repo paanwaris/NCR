@@ -59,7 +59,7 @@ peromyscus_buffer <- aggregate(peromyscus_buffer)
 plot(peromyscus_buffer, main = "Study Area Buffer")
 ```
 
-<img src="man/figures/README-unnamed-chunk-3-1.png" width="100%" />
+<img src="man/figures/Buffer.png" width="100%" />
 
 ``` r
 
@@ -76,7 +76,7 @@ bioclim_cropped <- terra::crop(bioclim_full, peromyscus_buffer, mask = TRUE)
 plot(bioclim_cropped)
 ```
 
-<img src="man/figures/README-unnamed-chunk-3-2.png" width="100%" />
+<img src="man/figures/Bioclim_masked.png" width="100%" />
 
 ``` r
 # --- Step 3c: Perform Principal Component Analysis (PCA) ---
@@ -92,7 +92,7 @@ names(pca_raster) <- paste0("PC", 1:3) # Rename layers for clarity
 plot(pca_raster)
 ```
 
-<img src="man/figures/README-unnamed-chunk-4-1.png" width="100%" />
+<img src="man/figures/PCA.png" width="100%" />
 
 4.  Construct Environmental Niche Ellipsoids In this chunk, we define
     the environmental niche for the entire genus and for each individual
@@ -396,7 +396,7 @@ plot_genus_abundance <- ggplot(pop_total_datsite,
 plot_genus_abundance
 ```
 
-<img src="man/figures/README-unnamed-chunk-8-1.png" width="100%" />
+<img src="man/figures/population.png" width="100%" />
 
 8.  Calculate Temporal Occupancy Frequency Instead of abundance, we can
     use temporal occupancy as a proxy for habitat suitability. A
@@ -407,14 +407,6 @@ plot_genus_abundance
 ``` r
 # Re-read occurrence data (or reuse 'pero' if no changes).
 occur_data <- read_csv("data/Peromyscus_occurrence.csv")
-#> Rows: 76751 Columns: 8
-#> ── Column specification ────────────────────────────────────────────────────────
-#> Delimiter: ","
-#> chr (3): genus, species, eventDate
-#> dbl (5): decimalLongitude, decimalLatitude, month, day, year
-#> 
-#> ℹ Use `spec()` to retrieve the full column specification for this data.
-#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
 
 # Create a proper datetime column from year, month, day.
 occur_data$datetime <- as.POSIXct(paste0(occur_data$day,'-',
@@ -512,7 +504,7 @@ plot_occupancy_genus <- ggplot(occupancy_grid_pca,
 plot_occupancy_genus
 ```
 
-<img src="man/figures/README-unnamed-chunk-10-1.png" width="100%" />
+<img src="man/figures/OFI.png" width="100%" />
 
 10. Test Niche-Occupancy Relationship (Species Level) Finally, we test
     the hypothesis at the species level. Is a location’s occupancy
@@ -593,7 +585,7 @@ plot_faceted_species <- ggplot(analysis_df_filtered,
 plot_faceted_species
 ```
 
-<img src="man/figures/README-unnamed-chunk-11-1.png" width="100%" />
+<img src="man/figures/sp_OFI.png" width="100%" />
 
 11. 3D VISUALIZATION: NICHE SPACE WITH TEMPORAL OCCUPANCY This chunk
     creates a similar 3D plot as before, but this time overlays the
