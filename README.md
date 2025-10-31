@@ -1,3 +1,4 @@
+The Niche-Center Relationship in Ecological Niche Modeling
 
 1.  Load Libraries This chunk loads all the necessary R packages for the
     analysis. Each package serves a specific purpose, from spatial data
