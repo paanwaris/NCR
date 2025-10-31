@@ -384,8 +384,7 @@ plot_genus_abundance <- ggplot(pop_total_datsite,
   ) +
   labs(
     x = "Distance to Genus Niche Centroid",
-    y = "Population Abundance (Estimate)",
-    title = "Niche-Abundance Relationship (Genus Level)"
+    y = "Population Abundance (Estimate)"
   ) +
   theme_classic(base_size = 14) +
   theme(
@@ -496,8 +495,7 @@ plot_occupancy_genus <- ggplot(occupancy_grid_pca,
   scale_y_continuous(labels = scales::percent) +
   labs(
     x = "Distance to Genus Niche Centroid", 
-    y = "Monthly Occupancy Frequency",
-    title = "Niche-Occupancy Relationship (Genus Level)"
+    y = "Monthly Occupancy Frequency"
   ) +
   theme_classic(base_family = "serif", base_size = 14)
 
@@ -573,8 +571,7 @@ plot_faceted_species <- ggplot(analysis_df_filtered,
   scale_y_continuous(labels = scales::percent) +
   labs(
     x = "Distance to Own Species Niche Centroid",
-    y = "Monthly Occupancy Frequency",
-    title = "Niche-Occupancy Relationship at the Species Level"
+    y = "Monthly Occupancy Frequency"
   ) +
   theme_bw(base_family = "serif") +
   theme(
@@ -587,7 +584,7 @@ plot_faceted_species
 
 <img src="man/figures/sp_OFI.png" width="100%" />
 
-11. 3D VISUALIZATION: NICHE SPACE WITH TEMPORAL OCCUPANCY This chunk
+11. 3D VISUALIZATION: Niche space with temporary occupancy. This chunk
     creates a similar 3D plot as before, but this time overlays the
     temporal occupancy frequency instead of population density.
 
