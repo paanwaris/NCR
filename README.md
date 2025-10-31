@@ -342,9 +342,9 @@ fig <- fig %>% layout(
 #    family = "Times New Roman",
 #    size = 12)
 #  )
+```
 
 <img src="man/figures/Occupancy_Frequency_Index.png" width="100%" />
-```
 
 7.  Test Niche-Center Relationship (Genus Level) Here, we test the
     “niche centrality” hypothesis at the genus level: are populations
@@ -701,5 +701,6 @@ fig_occ <- fig_occ %>%
 #    family = "Times New Roman",
 #    size = 12)
 #  )
-<img src="man/figures/Abundance.png" width="100%" />
 ```
+
+<img src="man/figures/Abundance.png" width="100%" />
